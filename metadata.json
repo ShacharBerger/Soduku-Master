@@ -1,0 +1,5 @@
+{
+  "name": "Sudoku Berger",
+  "description": "A polished Sudoku game with 3 difficulty levels, mistake tracking, and AI-generated background music.",
+  "requestFramePermissions": []
+}
