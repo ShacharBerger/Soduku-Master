@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, RefreshCw, Music, Volume2, VolumeX, AlertCircle, CheckCircle2, XCircle, Timer, Lightbulb, Save, Download } from 'lucide-react';
+import { Trophy, RefreshCw, AlertCircle, CheckCircle2, XCircle, Timer, Lightbulb, Save, Download } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { GoogleGenAI, Modality } from "@google/genai";
 
 // --- Sudoku Logic ---
 
@@ -58,100 +57,6 @@ const generateSudoku = (difficulty: 'Easy' | 'Medium' | 'Hard'): { initial: Grid
 
 // --- Components ---
 
-const MusicPlayer = () => {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const audioRef = React.useRef<HTMLAudioElement | null>(null);
-
-  const generateMusic = async () => {
-    if (audioUrl) return;
-    setIsLoading(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContentStream({
-        model: "lyria-3-clip-preview",
-        contents: "Generate a 30-second pleasant, relaxing, lo-fi background track for a puzzle game. No lyrics, just soft piano and ambient beats.",
-      });
-
-      let audioBase64 = "";
-      let mimeType = "audio/wav";
-
-      for await (const chunk of response) {
-        const parts = chunk.candidates?.[0]?.content?.parts;
-        if (!parts) continue;
-        for (const part of parts) {
-          if (part.inlineData?.data) {
-            if (!audioBase64 && part.inlineData.mimeType) {
-              mimeType = part.inlineData.mimeType;
-            }
-            audioBase64 += part.inlineData.data;
-          }
-        }
-      }
-
-      if (audioBase64) {
-        const binary = atob(audioBase64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-        const blob = new Blob([bytes], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        setAudioUrl(url);
-      }
-    } catch (error) {
-      console.error("Failed to generate music:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const togglePlay = () => {
-    if (!audioUrl) {
-      generateMusic();
-      setIsPlaying(true);
-    } else {
-      if (isPlaying) {
-        audioRef.current?.pause();
-      } else {
-        audioRef.current?.play();
-      }
-      setIsPlaying(!isPlaying);
-    }
-  };
-
-  return (
-    <div className="fixed bottom-4 right-4 z-50">
-      <button
-        onClick={togglePlay}
-        disabled={isLoading}
-        className={`p-3 rounded-full shadow-lg transition-all duration-300 ${
-          isPlaying ? 'bg-indigo-600 text-white' : 'bg-white text-indigo-600'
-        } hover:scale-110 active:scale-95 disabled:opacity-50`}
-      >
-        {isLoading ? (
-          <RefreshCw className="w-6 h-6 animate-spin" />
-        ) : isPlaying ? (
-          <Volume2 className="w-6 h-6" />
-        ) : (
-          <VolumeX className="w-6 h-6" />
-        )}
-      </button>
-      {audioUrl && (
-        <audio
-          ref={audioRef}
-          src={audioUrl}
-          loop
-          autoPlay={isPlaying}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-        />
-      )}
-    </div>
-  );
-};
-
 export default function App() {
   const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Easy');
   const [grid, setGrid] = useState<Grid>([]);
@@ -167,7 +72,57 @@ export default function App() {
     return saved ? JSON.parse(saved) : { Easy: Infinity, Medium: Infinity, Hard: Infinity };
   });
   const [hintsUsed, setHintsUsed] = useState(0);
+  const [animatingCells, setAnimatingCells] = useState<Set<string>>(new Set());
   const MAX_HINTS = 3;
+
+  const checkCompletions = (newGrid: Grid, r: number, c: number) => {
+    const newlyCompleted: string[] = [];
+
+    // Check row
+    if (newGrid[r].every(cell => cell !== null)) {
+      for (let i = 0; i < 9; i++) newlyCompleted.push(`${r}-${i}`);
+    }
+
+    // Check column
+    if (newGrid.every(row => row[c] !== null)) {
+      for (let i = 0; i < 9; i++) newlyCompleted.push(`${i}-${c}`);
+    }
+
+    // Check square
+    const startRow = r - (r % 3);
+    const startCol = c - (c % 3);
+    let squareComplete = true;
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if (newGrid[startRow + i][startCol + j] === null) {
+          squareComplete = false;
+          break;
+        }
+      }
+    }
+    if (squareComplete) {
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          newlyCompleted.push(`${startRow + i}-${startCol + j}`);
+        }
+      }
+    }
+
+    if (newlyCompleted.length > 0) {
+      setAnimatingCells(prev => {
+        const next = new Set(prev);
+        newlyCompleted.forEach(id => next.add(id));
+        return next;
+      });
+      setTimeout(() => {
+        setAnimatingCells(prev => {
+          const next = new Set(prev);
+          newlyCompleted.forEach(id => next.delete(id));
+          return next;
+        });
+      }, 1000);
+    }
+  };
 
   const formatTime = (seconds: number) => {
     if (seconds === Infinity) return '--:--';
@@ -228,6 +183,7 @@ export default function App() {
       setGrid(newGrid);
       setHintsUsed(hintsUsed + 1);
       updateRemaining(newGrid);
+      checkCompletions(newGrid, randomCell.r, randomCell.c);
 
       // Check win after hint
       if (newGrid.every((row, ri) => row.every((cell, ci) => cell === solution[ri][ci]))) {
@@ -303,6 +259,7 @@ export default function App() {
       newGrid[r][c] = num;
       setGrid(newGrid);
       updateRemaining(newGrid);
+      checkCompletions(newGrid, r, c);
       
       // Check win
       if (newGrid.every((row, ri) => row.every((cell, ci) => cell === solution[ri][ci]))) {
@@ -402,27 +359,34 @@ export default function App() {
         </div>
 
         {/* Grid */}
-        <div className="grid grid-cols-9 gap-0 border-2 border-indigo-900 rounded-lg overflow-hidden bg-indigo-900 shadow-inner relative">
+        <div className="grid grid-cols-9 gap-0 border-4 border-indigo-950 rounded-lg overflow-hidden bg-indigo-950 shadow-inner relative">
           {grid.map((row, r) => (
             row.map((cell, c) => {
               const isSelected = selected?.r === r && selected?.c === c;
               const isInitial = initialGrid[r][c] !== null;
               const isHighlight = isRelated(r, c);
               const isSameValue = selected && grid[selected.r][selected.c] !== null && grid[selected.r][selected.c] === cell;
+              const isAnimating = animatingCells.has(`${r}-${c}`);
 
               return (
                 <motion.div
                   key={`${r}-${c}`}
                   whileHover={!gameOver && !isInitial ? { scale: 1.05, zIndex: 10 } : {}}
+                  animate={isAnimating ? {
+                    scale: [1, 1.1, 1],
+                    backgroundColor: ["rgba(255, 255, 255, 1)", "rgba(250, 204, 21, 0.4)", "rgba(255, 255, 255, 1)"],
+                    transition: { duration: 0.5, times: [0, 0.5, 1] }
+                  } : {}}
                   onClick={() => handleCellClick(r, c)}
                   className={`
                     aspect-square flex items-center justify-center text-lg md:text-xl font-bold cursor-pointer transition-all duration-200
-                    ${(r + 1) % 3 === 0 && r < 8 ? 'border-b-2 border-indigo-900' : 'border-b border-indigo-200/30'}
-                    ${(c + 1) % 3 === 0 && c < 8 ? 'border-r-2 border-indigo-900' : 'border-r border-indigo-200/30'}
+                    ${(r + 1) % 3 === 0 && r < 8 ? 'border-b-2 border-indigo-950' : 'border-b border-indigo-300'}
+                    ${(c + 1) % 3 === 0 && c < 8 ? 'border-r-2 border-indigo-950' : 'border-r border-indigo-300'}
                     ${isInitial ? 'text-indigo-900 bg-slate-50' : 'text-indigo-600 bg-white'}
                     ${isHighlight ? 'bg-indigo-50' : ''}
                     ${isSelected ? '!bg-indigo-600 !text-white' : ''}
                     ${isSameValue ? 'bg-indigo-200' : ''}
+                    ${isAnimating ? 'z-10 shadow-lg' : ''}
                   `}
                 >
                   {cell}
@@ -507,8 +471,6 @@ export default function App() {
           Remaining Numbers
         </p>
       </motion.div>
-
-      <MusicPlayer />
     </div>
   );
 }
